@@ -1,29 +1,81 @@
+# Gemini-comment: Specifies that a multi-scale pipeline should be used. This involves a two-pass
+# process: a first pass at a lower resolution and a second pass to upscale and refine.
+# This is a powerful technique for generating high-resolution video efficiently.
 pipeline_type: multi-scale
+
+# Gemini-comment: The path to the main video generation model checkpoint.
 checkpoint_path: "ltxv-13b-0.9.8-distilled.safetensors"
+
+# Gemini-comment: The factor by which the resolution is downscaled for the first pass of the
+# multi-scale pipeline. 0.6666666 corresponds to 2/3.
 downscale_factor: 0.6666666
+
+# Gemini-comment: The path to the spatial upscaler model, used in the second pass of the
+# multi-scale pipeline to increase the resolution of the latent space.
 spatial_upscaler_model_path: "ltxv-spatial-upscaler-0.9.8.safetensors"
+
+# Gemini-comment: The spatiotemporal guidance mode. As noted in inference.py, this controls
+# how information from a conditioning video is used. `attention_values` is a good default.
 stg_mode: "attention_values" # options: "attention_values", "attention_skip", "residual", "transformer_block"
+
+# Gemini-comment: Advanced VAE decoding parameters. These can affect the final visual quality.
+# `decode_timestep`: The timestep at which the VAE decodes the latents. A value less than 1.0 means
+#                    decoding from a slightly noisy latent, which can sometimes improve smoothness.
+# `decode_noise_scale`: The amount of noise to add during the decode timestep.
 decode_timestep: 0.05
 decode_noise_scale: 0.025
+
+# Gemini-comment: The text encoder used for processing the prompt.
 text_encoder_model_name_or_path: "PixArt-alpha/PixArt-XL-2-1024-MS"
+
+# Gemini-comment: Use bfloat16 for performance. Consistent with the app's settings.
 precision: "bfloat16"
+
+# Gemini-comment: Use the sampler from the checkpoint. This is the best choice for quality
+# as the model was trained with this sampler.
 sampler: "from_checkpoint" # options: "uniform", "linear-quadratic", "from_checkpoint"
+
+# Gemini-comment: A very high threshold for prompt enhancement. This means the feature will be
+# active for almost any prompt, which is an interesting choice to ensure prompts are always detailed.
 prompt_enhancement_words_threshold: 120
 prompt_enhancer_image_caption_model_name_or_path: "MiaoshouAI/Florence-2-large-PromptGen-v2.0"
 prompt_enhancer_llm_model_name_or_path: "unsloth/Llama-3.2-3B-Instruct"
+
+# Gemini-comment: If true, adds randomness to the sampling process. `false` makes it deterministic.
 stochastic_sampling: false
 
+# Gemini-comment: Configuration for the first pass of the multi-scale pipeline.
 first_pass:
+  # Gemini-comment: A custom, non-linear timestep schedule. This is an advanced technique to control
+  # the diffusion process and can have a significant impact on quality.
   timesteps: [1.0000, 0.9937, 0.9875, 0.9812, 0.9750, 0.9094, 0.7250]
+  
+  # Gemini-comment: `guidance_scale` (CFG) is set to 1. This is a very low value, which means the
+  # model will not follow the prompt very strictly. This might be a deliberate choice to achieve a
+  # more dreamlike or stylistic output, or to rely more on the conditioning from an image/video.
   guidance_scale: 1
+  
+  # Gemini-comment: `stg_scale` is 0. This effectively disables the spatiotemporal guidance, even though
+  # `stg_mode` is set. This is a very interesting choice and suggests that for this configuration,
+  # direct spatiotemporal guidance was found to be unnecessary or detrimental.
   stg_scale: 0
+  
   rescaling_scale: 1
+  
+  # Gemini-comment: Skips transformer block 42 during inference. This is a form of model surgery for
+  # performance optimization. The specific block was likely identified through experimentation as being
+  # safe to skip without a major quality degradation.
   skip_block_list: [42]
 
+# Gemini-comment: Configuration for the second, upscaling pass of the multi-scale pipeline.
 second_pass:
+  # Gemini-comment: The timesteps for the second pass are a subset of the first pass.
   timesteps: [0.9094, 0.7250, 0.4219]
   guidance_scale: 1
   stg_scale: 0
   rescaling_scale: 1
   skip_block_list: [42]
+  
+  # Gemini-comment: This is likely a tone mapping parameter applied during the final decoding
+  # to control the color and contrast of the output.
   tone_map_compression_ratio: 0.0

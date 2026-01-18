@@ -8,107 +8,20 @@ sys.path.insert(0, str(current_dir / "packages" / "ltx-core" / "src"))
 
 import spaces
 import gradio as gr
-from gradio_client import Client, handle_file
 import numpy as np
-import random
-import torch
-from typing import Optional
-from pathlib import Path
-from huggingface_hub import hf_hub_download
-from gradio_client import Client
-from ltx_pipelines.distilled import DistilledPipeline
-from ltx_core.tiling import TilingConfig
-from ltx_core.loader.primitives import LoraPathStrengthAndSDOps
-from ltx_core.loader.sd_ops import LTXV_LORA_COMFY_RENAMING_MAP
 from ltx_pipelines.constants import (
     DEFAULT_SEED,
     DEFAULT_HEIGHT,
     DEFAULT_WIDTH,
-    DEFAULT_NUM_FRAMES,
-    DEFAULT_FRAME_RATE,
-    DEFAULT_LORA_STRENGTH,
 )
+from video_generator import generate_single_clip, stitch_videos
 
 MAX_SEED = np.iinfo(np.int32).max
 # Default prompt from docstring example
 DEFAULT_PROMPT = "An astronaut hatches from a fragile egg on the surface of the Moon, the shell cracking and peeling apart in gentle low-gravity motion. Fine lunar dust lifts and drifts outward with each movement, floating in slow arcs before settling back onto the ground. The astronaut pushes free in a deliberate, weightless motion, small fragments of the egg tumbling and spinning through the air. In the background, the deep darkness of space subtly shifts as stars glide with the camera's movement, emphasizing vast depth and scale. The camera performs a smooth, cinematic slow push-in, with natural parallax between the foreground dust, the astronaut, and the distant starfield. Ultra-realistic detail, physically accurate low-gravity motion, cinematic lighting, and a breath-taking, movie-like shot."
 
-# HuggingFace Hub defaults
-DEFAULT_REPO_ID = "Lightricks/LTX-2"
-DEFAULT_CHECKPOINT_FILENAME = "ltx-2-19b-dev-fp8.safetensors"
-DEFAULT_DISTILLED_LORA_FILENAME = "ltx-2-19b-distilled-lora-384.safetensors"
-DEFAULT_SPATIAL_UPSAMPLER_FILENAME = "ltx-2-spatial-upscaler-x2-1.0.safetensors"
-
-# Text encoder space URL
-TEXT_ENCODER_SPACE = "linoyts/gemma-text-encoder"
-
-def get_hub_or_local_checkpoint(repo_id: Optional[str] = None, filename: Optional[str] = None):
-    """Download from HuggingFace Hub or use local checkpoint."""
-    if repo_id is None and filename is None:
-        raise ValueError("Please supply at least one of `repo_id` or `filename`")
-
-    if repo_id is not None:
-        if filename is None:
-            raise ValueError("If repo_id is specified, filename must also be specified.")
-        print(f"Downloading {filename} from {repo_id}...")
-        ckpt_path = hf_hub_download(repo_id=repo_id, filename=filename)
-        print(f"Downloaded to {ckpt_path}")
-    else:
-        ckpt_path = filename
-
-    return ckpt_path
-
-
-# Initialize pipeline at startup
-print("=" * 80)
-print("Loading LTX-2 Distilled pipeline...")
-print("=" * 80)
-
-checkpoint_path = get_hub_or_local_checkpoint(DEFAULT_REPO_ID, DEFAULT_CHECKPOINT_FILENAME)
-distilled_lora_path = get_hub_or_local_checkpoint(DEFAULT_REPO_ID, DEFAULT_DISTILLED_LORA_FILENAME)
-spatial_upsampler_path = get_hub_or_local_checkpoint(DEFAULT_REPO_ID, DEFAULT_SPATIAL_UPSAMPLER_FILENAME)
-
-print(f"Initializing pipeline with:")
-print(f"  checkpoint_path={checkpoint_path}")
-print(f"  distilled_lora_path={distilled_lora_path}")
-print(f"  spatial_upsampler_path={spatial_upsampler_path}")
-print(f"  text_encoder_space={TEXT_ENCODER_SPACE}")
-
-# Load distilled LoRA as a regular LoRA
-loras = [
-    LoraPathStrengthAndSDOps(
-        path=distilled_lora_path,
-        strength=DEFAULT_LORA_STRENGTH,
-        sd_ops=LTXV_LORA_COMFY_RENAMING_MAP,
-    )
-]
-
-# Initialize pipeline WITHOUT text encoder (gemma_root=None)
-# Text encoding will be done by external space
-pipeline = DistilledPipeline(
-    checkpoint_path=checkpoint_path,
-    spatial_upsampler_path=spatial_upsampler_path,
-    gemma_root=None,  # No text encoder in this space
-    loras=loras,
-    fp8transformer=True,
-    local_files_only=False,
-)
-
-# Initialize text encoder client
-print(f"Connecting to text encoder space: {TEXT_ENCODER_SPACE}")
-try:
-    text_encoder_client = Client(TEXT_ENCODER_SPACE)
-    print("✓ Text encoder client connected!")
-except Exception as e:
-    print(f"⚠ Warning: Could not connect to text encoder space: {e}")
-    text_encoder_client = None
-
-print("=" * 80)
-print("Pipeline fully loaded and ready!")
-print("=" * 80)
-
 @spaces.GPU(duration=300)
-def generate_video(
+def generate_video_for_gradio(
     input_image,
     prompt: str,
     duration: float,
@@ -117,100 +30,39 @@ def generate_video(
     randomize_seed: bool = True,
     height: int = DEFAULT_HEIGHT,
     width: int = DEFAULT_WIDTH,
+    clips_list: list = [],
     progress=gr.Progress(track_tqdm=True)
 ):
-    """Generate a video based on the given parameters."""
-    try:
-        # Randomize seed if checkbox is enabled
-        current_seed = random.randint(0, MAX_SEED) if randomize_seed else int(seed)
-
-        # Calculate num_frames from duration (using fixed 24 fps)
-        frame_rate = 24.0
-        num_frames = int(duration * frame_rate) + 1  # +1 to ensure we meet the duration
-
-        # Create output directory if it doesn't exist
-        output_dir = Path("outputs")
-        output_dir.mkdir(exist_ok=True)
-        output_path = output_dir / f"video_{current_seed}.mp4"
-
-        # Handle image input
-        images = []
-        temp_image_path = None  # Initialize to None
-        
-        if input_image is not None:
-            # Save uploaded image temporarily
-            temp_image_path = output_dir / f"temp_input_{current_seed}.jpg"
-            if hasattr(input_image, 'save'):
-                input_image.save(temp_image_path)
-            else:
-                # If it's a file path already
-                temp_image_path = Path(input_image)
-            # Format: (image_path, frame_idx, strength)
-            images = [(str(temp_image_path), 0, 1.0)]
-        
-        # Get embeddings from text encoder space
-        print(f"Encoding prompt: {prompt}")
-        
-        if text_encoder_client is None:
-            raise RuntimeError(
-                f"Text encoder client not connected. Please ensure the text encoder space "
-                f"({TEXT_ENCODER_SPACE}) is running and accessible."
-            )
-        
-        try:
-            # Prepare image for upload if it exists
-            image_input = None
-            if temp_image_path is not None:
-                image_input = handle_file(str(temp_image_path))
-            
-            result = text_encoder_client.predict(
-                prompt=prompt,
-                enhance_prompt=enhance_prompt,
-                input_image=image_input,
-                seed=current_seed,
-                negative_prompt="",
-                api_name="/encode_prompt"
-            )
-            embedding_path = result[0]  # Path to .pt file
-            print(f"Embeddings received from: {embedding_path}")
+    """Generate a video based on the given parameters and updates the UI."""
+    output_path, seed_val = generate_single_clip(
+        input_image=input_image,
+        prompt=prompt,
+        duration=duration,
+        enhance_prompt=enhance_prompt,
+        seed=seed,
+        randomize_seed=randomize_seed,
+        height=height,
+        width=width,
+    )
     
-            # Load embeddings
-            embeddings = torch.load(embedding_path)
-            video_context = embeddings['video_context']
-            audio_context = embeddings['audio_context']
-            print("✓ Embeddings loaded successfully")
-        except Exception as e:
-            raise RuntimeError(
-                f"Failed to get embeddings from text encoder space: {e}\n"
-                f"Please ensure {TEXT_ENCODER_SPACE} is running properly."
-            )
+    if output_path:
+        updated_clips_list = clips_list + [output_path]
+        return output_path, seed_val, updated_clips_list, f"Clips created: {len(updated_clips_list)}"
+    else:
+        return None, seed, clips_list, f"Clips created: {len(clips_list)}"
 
-        # Run inference - progress automatically tracks tqdm from pipeline
-        pipeline(
-            prompt=prompt,
-            output_path=str(output_path),
-            seed=current_seed,
-            height=height,
-            width=width,
-            num_frames=num_frames,
-            frame_rate=frame_rate,
-            images=images,
-            tiling_config=TilingConfig.default(),
-            video_context=video_context,
-            audio_context=audio_context,
-        )
-
-        return str(output_path), current_seed
-
-    except Exception as e:
-        import traceback
-        error_msg = f"Error: {str(e)}\n{traceback.format_exc()}"
-        print(error_msg)
+def stitch_videos_for_gradio(clips_list):
+    if not clips_list or len(clips_list) < 2:
+        gr.Warning("You need at least two clips to stitch them together!")
         return None
-
+    
+    final_video_path = stitch_videos(clips_list)
+    return final_video_path
 
 # Create Gradio interface
 with gr.Blocks(title="LTX-2 Video Distilled 🎥🔈") as demo:
+    clips_state = gr.State([])
+
     gr.Markdown("# LTX-2 Distilled 🎥🔈: The First Open Source Audio-Video Model")
     gr.Markdown("Fast, state-of-the-art video & audio generation with [Lightricks LTX-2 TI2V model](https://huggingface.co/Lightricks/LTX-2) and [distillation LoRA](https://huggingface.co/Lightricks/LTX-2/blob/main/ltx-2-19b-distilled-lora-384.safetensors) for accelerated inference. Read more: [[model]](https://huggingface.co/Lightricks/LTX-2), [[code]](https://github.com/Lightricks/LTX-2)")
     with gr.Row():
@@ -241,6 +93,12 @@ with gr.Blocks(title="LTX-2 Video Distilled 🎥🔈") as demo:
                     )
 
             generate_btn = gr.Button("Generate Video", variant="primary", size="lg")
+            
+            with gr.Accordion("Stitching", open=True):
+                clip_counter_display = gr.Markdown("Clips created: 0")
+                stitch_btn = gr.Button("Stitch Clips", variant="secondary")
+                clear_clips_btn = gr.Button("Clear Clips", variant="stop")
+
 
             with gr.Accordion("Advanced Settings", open=False):
                 seed = gr.Slider(
@@ -269,10 +127,14 @@ with gr.Blocks(title="LTX-2 Video Distilled 🎥🔈") as demo:
                     )
 
         with gr.Column():
-            output_video = gr.Video(label="Generated Video", autoplay=True)
+            output_video = gr.Video(label="Last Generated Clip", autoplay=True)
+            final_video = gr.Video(label="Stitched Video", autoplay=False)
+            
+    def clear_clips():
+        return [], "Clips created: 0", None, None
 
     generate_btn.click(
-        fn=generate_video,
+        fn=generate_video_for_gradio,
         inputs=[
             input_image,
             prompt,
@@ -282,8 +144,20 @@ with gr.Blocks(title="LTX-2 Video Distilled 🎥🔈") as demo:
             randomize_seed,
             height,
             width,
+            clips_state,
         ],
-        outputs=[output_video,seed]
+        outputs=[output_video, seed, clips_state, clip_counter_display]
+    )
+
+    stitch_btn.click(
+        fn=stitch_videos_for_gradio,
+        inputs=[clips_state],
+        outputs=[final_video]
+    )
+    
+    clear_clips_btn.click(
+        fn=clear_clips,
+        outputs=[clips_state, clip_counter_display, output_video, final_video]
     )
 
     # Add example
@@ -306,9 +180,9 @@ with gr.Blocks(title="LTX-2 Video Distilled 🎥🔈") as demo:
             ]
             
         ],
-        fn=generate_video,
+        fn=generate_video_for_gradio,
         inputs=[input_image, prompt, duration],
-        outputs = [output_video, seed],
+        outputs = [output_video, seed, clips_state, clip_counter_display],
         label="Example",
         cache_examples=True,
         cache_mode="lazy",

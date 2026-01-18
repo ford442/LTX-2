@@ -1711,6 +1711,18 @@ class LTXVideoPipeline(DiffusionPipeline):
                 the prefix latents, relevant if `prefix_latents_mode` is "soft". Defaults to 0.1.
 
         """
+        # Gemini-comment: This function is also highly relevant to achieving seamless video stitching.
+        # It provides special handling for a conditioning video that starts in the middle of a
+        # generation. The `prefix_latents_mode` parameter is particularly important for controlling
+        # the transition between the existing video and the new conditioning sequence.
+        # - `concat`: Treats the beginning of the conditioning video as extra frames, which can be
+        #   a hard transition.
+        # - `drop`: Ignores the beginning of the conditioning video, which might lose some context.
+        # - `soft`: This is a sophisticated approach that blends the conditioning video in with a
+        #   reduced strength (`prefix_soft_conditioning_strength`). This is likely a key
+        #   parameter to tune for making transitions smoother and less jarring.
+        # The default mode is `concat`, which might not be the smoothest. Experimenting with `soft`
+        # could be a good way to improve the stitching quality.
         f_l = latents.shape[2]
         f_l_p = num_prefix_latent_frames
         assert f_l >= f_l_p
@@ -1770,6 +1782,12 @@ class LTXVideoPipeline(DiffusionPipeline):
         Returns:
             int: updated sequence length
         """
+        # Gemini-comment: This function is critical for video stitching and continuation. It ensures that
+        # any conditioning video (e.g., the previous clip) is trimmed to a length that the model can
+        # process. The CausalVideoAutoencoder requires the number of frames to follow a specific
+        # structure: `(N * scale_factor) + 1`, where `scale_factor` is the temporal downsampling
+        # factor of the VAE (typically 8). This function correctly enforces that structure, making
+        # it possible to use conditioning videos of arbitrary lengths.
         scale_factor = self.video_scale_factor
         num_frames = min(sequence_num_frames, target_num_frames - start_frame)
         # Trim down to a multiple of temporal_scale_factor frames plus 1
