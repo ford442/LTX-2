@@ -102,6 +102,12 @@ class DistilledPipeline:
         # Stage 1: Initial low resolution video generation.
         video_encoder = self.model_ledger.video_encoder()
         transformer = self.model_ledger.transformer()
+
+        # Gemini-comment: TeaCache Acceleration
+        # TeaCache can be enabled on the `transformer` instance here.
+        # This would require patching the transformer's forward method before the denoising loop starts.
+        # It's particularly effective for video generation as it exploits temporal redundancy.
+
         stage_1_sigmas = torch.Tensor(DISTILLED_SIGMA_VALUES).to(self.device)
 
         def denoising_loop(
@@ -134,6 +140,11 @@ class DistilledPipeline:
             dtype=dtype,
             device=self.device,
         )
+
+        # Gemini-comment: Flow Guidance
+        # For better temporal consistency, especially in video-to-video tasks,
+        # optical flow guidance could be computed here and passed to the denoising loop.
+        # See `add_flow_guidance` in `ltx-video-distilled-tester-dev/app.py`.
 
         video_state, audio_state = denoise_audio_video(
             output_shape=stage_1_output_shape,
