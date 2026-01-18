@@ -1,6 +1,6 @@
 # Review Summary
 
-This document summarizes the analysis and comments added to the `ltx-video-distilled-tester` codebase. The goal was to identify and comment on all settings, choices, and code that affect performance and quality, with a special focus on video continuation and stitching.
+This document summarizes the analysis and comments added to the `ltx-video-distilled-tester-dev` codebase. The goal was to identify and comment on all settings, choices, and code that affect performance and quality, with a special focus on video continuation and stitching.
 
 ## Files Analyzed and Commented
 
@@ -27,7 +27,7 @@ This document summarizes the analysis and comments added to the `ltx-video-disti
 
 ## Key Findings and Observations
 
-The codebase for `ltx-video-distilled-tester` is highly customized and contains many advanced optimizations and non-standard parameter choices, clearly the result of extensive tuning.
+The codebase for `ltx-video-distilled-tester-dev` is highly customized and contains many advanced optimizations and non-standard parameter choices, clearly the result of extensive tuning.
 
 -   **Performance**: The application is heavily optimized for performance on consumer GPUs, employing techniques like `bfloat16` precision, aggressive memory management, VAE tiling, attention slicing, and a custom caching mechanism (TeaCache).
 -   **Quality**: Quality settings are finely tuned. The use of a multi-scale pipeline, custom timestep schedules, and specific negative prompts points to a focus on high-quality output. The very low guidance scale (`1`) and disabled spatiotemporal guidance scale (`0`) in the default config are unusual and suggest a deliberate artistic or stylistic choice, relying less on prompt guidance and more on the conditioning input or the model's internal style.

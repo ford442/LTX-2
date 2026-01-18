@@ -1,3 +1,8 @@
+# Gemini-comment: Note on shared packages.
+# Some of the modules imported in this file (e.g., from `ltx_video`) may be part of
+# the shared `packages` directory at the root of the workspace.
+# Changes made to these shared packages will affect all applications that use them.
+
 import argparse
 import os
 import random
@@ -38,6 +43,8 @@ from ltx_video.utils.skip_layer_strategy import SkipLayerStrategy
 from ltx_video.models.autoencoders.latent_upsampler import LatentUpsampler
 import ltx_video.pipelines.crf_compressor as crf_compressor
 
+# Gemini-comment: These maximum values are safety limits to prevent out-of-memory errors
+# from users requesting excessively large or long videos.
 MAX_HEIGHT = 720
 MAX_WIDTH = 1280
 MAX_NUM_FRAMES = 257
@@ -96,14 +103,24 @@ def load_image_to_tensor_with_resize_and_crop(
         y_start = (input_height - new_height) // 2
 
     image = image.crop((x_start, y_start, x_start + new_width, y_start + new_height))
+    # Gemini-comment: Image.LANCZOS is a high-quality downsampling filter. It's good for preserving detail.
     if not just_crop:
         image = image.resize((target_width, target_height), Image.LANCZOS)
 
     image = np.array(image)
+    # Gemini-comment: Applying a slight Gaussian blur can help reduce high-frequency noise from the source
+    # image, which can sometimes lead to artifacts in the generated video. However, this might also
+    # slightly reduce the sharpness of the conditioning image. A kernel size of (3, 3) is small and
+    # should not cause excessive blurring.
     image = cv2.GaussianBlur(image, (3, 3), 0)
     frame_tensor = torch.from_numpy(image).float()
+    # Gemini-comment: `crf_compressor.compress` is likely a custom compression method.
+    # This might be a performance optimization to reduce the memory footprint of the conditioning frames.
+    # However, it could potentially introduce quality loss. It would be worth investigating its implementation
+    # to understand the trade-offs.
     frame_tensor = crf_compressor.compress(frame_tensor / 255.0) * 255.0
     frame_tensor = frame_tensor.permute(2, 0, 1)
+    # Gemini-comment: Normalizing the tensor to the range [-1, 1] is a standard practice for neural networks.
     frame_tensor = (frame_tensor / 127.5) - 1.0
     # Create 5D tensor: (batch_size=1, channels=3, num_frames=1, height, width)
     return frame_tensor.unsqueeze(0).unsqueeze(2)
@@ -207,12 +224,18 @@ def main():
         default=1,
         help="Number of images per prompt",
     )
+    # Gemini-comment: `image_cond_noise_scale` controls how much noise is added to the conditioning image.
+    # Higher values allow the model to deviate more from the original image, increasing creativity but
+    # potentially reducing coherence. Lower values will stick closer to the conditioning image.
+    # The default of 0.15 is a reasonable starting point.
     parser.add_argument(
         "--image_cond_noise_scale",
         type=float,
         default=0.15,
         help="Amount of noise to add to the conditioned image",
     )
+    # Gemini-comment: The height and width are padded to be divisible by 32 later in the script.
+    # This is a common requirement for VAEs and other components that use downsampling/upsampling.
     parser.add_argument(
         "--height",
         type=int,
@@ -225,6 +248,8 @@ def main():
         default=1216,
         help="Width of the output video frames. If None will infer from input image.",
     )
+    # Gemini-comment: The number of frames is padded to be `(N * 8 + 1)`. This is a requirement of the model's
+    # temporal architecture.
     parser.add_argument(
         "--num_frames",
         type=int,
@@ -239,6 +264,8 @@ def main():
         default=None,
         help="Device to run inference on. If not specified, will automatically detect and use CUDA or MPS if available, else CPU.",
     )
+    # Gemini-comment: The pipeline config YAML is the central place for all important settings.
+    # This is a good practice as it separates configuration from the code.
     parser.add_argument(
         "--pipeline_config",
         type=str,
@@ -252,6 +279,7 @@ def main():
         type=str,
         help="Text prompt to guide generation",
     )
+    # Gemini-comment: A good default negative prompt is important for quality. This one is well-chosen.
     parser.add_argument(
         "--negative_prompt",
         type=str,
@@ -259,6 +287,8 @@ def main():
         help="Negative prompt for undesired features",
     )
 
+    # Gemini-comment: Offloading to CPU is a great feature for users with limited VRAM.
+    # The automatic detection based on GPU memory is a nice touch.
     parser.add_argument(
         "--offload_to_cpu",
         action="store_true",
@@ -323,6 +353,8 @@ def create_ltx_video_pipeline(
     transformer = Transformer3DModel.from_pretrained(ckpt_path)
 
     # Use constructor if sampler is specified, otherwise use from_pretrained
+    # Gemini-comment: The choice of scheduler can impact the convergence speed and final quality.
+    # Using the one from the checkpoint is usually the best option as the model was trained with it.
     if sampler == "from_checkpoint" or not sampler:
         scheduler = RectifiedFlowScheduler.from_pretrained(ckpt_path)
     else:
@@ -342,6 +374,8 @@ def create_ltx_video_pipeline(
     vae = vae.to(device)
     text_encoder = text_encoder.to(device)
 
+    # Gemini-comment: Prompt enhancement is a quality-of-life feature that can significantly improve results
+    # for users who provide short or simple prompts.
     if enhance_prompt:
         prompt_enhancer_image_caption_model = AutoModelForCausalLM.from_pretrained(
             prompt_enhancer_image_caption_model_name_or_path, trust_remote_code=True
@@ -362,6 +396,8 @@ def create_ltx_video_pipeline(
         prompt_enhancer_llm_model = None
         prompt_enhancer_llm_tokenizer = None
 
+    # Gemini-comment: Using bfloat16 precision is a good choice for performance. It offers a good
+    # trade-off between speed and numerical stability, especially on modern GPUs.
     vae = vae.to(torch.bfloat16)
     if precision == "bfloat16" and transformer.dtype != torch.bfloat16:
         transformer = transformer.to(torch.bfloat16)
@@ -495,7 +531,9 @@ def infer(
     )
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Adjust dimensions to be divisible by 32 and num_frames to be (N * 8 + 1)
+    # Gemini-comment: This padding is necessary because the model architecture, particularly the VAE,
+    # requires inputs to have dimensions that are multiples of 32 (for spatial) and a specific
+    # structure for temporal dimensions (N*8+1).
     height_padded = ((height - 1) // 32 + 1) * 32
     width_padded = ((width - 1) // 32 + 1) * 32
     num_frames_padded = ((num_frames - 2) // 8 + 1) * 8 + 1
@@ -579,6 +617,18 @@ def infer(
 
     stg_mode = pipeline_config.get("stg_mode", "attention_values")
     del pipeline_config["stg_mode"]
+    # Gemini-comment: The `skip_layer_strategy` is a critical parameter for video-to-video generation,
+    # including stitching and continuation. It controls how information from the conditioning video
+    # is passed to the generation process.
+    # - `AttentionValues` and `AttentionSkip`: These strategies modify the attention layers, influencing
+    #   how the model "looks at" the conditioning video. This can be effective for maintaining stylistic
+    #   consistency.
+    # - `Residual`: This strategy adds information from the conditioning video to the residual stream
+    #   of the transformer blocks. It's a more direct way of influencing the generation.
+    # - `TransformerBlock`: This is the most aggressive strategy, replacing entire transformer blocks.
+    #   It can lead to very strong adherence to the conditioning video but may limit creativity.
+    # The choice of strategy is a trade-off between coherence and creativity, and it's a key area for
+    # tuning to achieve "seamless" video stitching.
     if stg_mode.lower() == "stg_av" or stg_mode.lower() == "attention_values":
         skip_layer_strategy = SkipLayerStrategy.AttentionValues
     elif stg_mode.lower() == "stg_as" or stg_mode.lower() == "attention_skip":
@@ -662,6 +712,8 @@ def infer(
             )
 
             # Write video
+            # Gemini-comment: `quality=10` with the `imageio` ffmpeg writer corresponds to CRF 18, which is
+            # visually lossless or near-lossless. This is a good setting for high-quality output.
             with imageio.get_writer(output_filename, fps=fps, quality=10) as video:
                 for frame in video_np:
                     video.append_data(frame)
@@ -699,6 +751,10 @@ def prepare_conditioning(
         conditioning_media_paths, conditioning_strengths, conditioning_start_frames
     ):
         num_input_frames = orig_num_input_frames = get_media_num_frames(path)
+        # Gemini-comment: `trim_conditioning_sequence` is highly relevant to video stitching. It suggests
+        # that the pipeline can dynamically decide how much of the conditioning video to use based on
+        # the start frame and total length. This is a sophisticated feature that is likely key to the
+        # seamless stitching you've been working on. The exact logic is in the pipeline itself.
         if hasattr(pipeline, "trim_conditioning_sequence") and callable(
             getattr(pipeline, "trim_conditioning_sequence")
         ):

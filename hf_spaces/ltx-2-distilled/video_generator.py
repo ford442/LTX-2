@@ -1,3 +1,8 @@
+# Gemini-comment: Note on shared packages.
+# Some of the modules imported in this file (e.g., from `ltx_pipelines` and `ltx_core`) 
+# are part of the shared `packages` directory at the root of the workspace.
+# Changes made to these shared packages will affect all applications that use them.
+
 import sys
 from pathlib import Path
 import random

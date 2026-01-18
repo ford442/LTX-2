@@ -1,3 +1,8 @@
+# Gemini-comment: Note on shared packages.
+# Some of the modules imported in this file (e.g., from `ltx_video`) may be part of
+# the shared `packages` directory at the root of the workspace.
+# Changes made to these shared packages will affect all applications that use them.
+
 import spaces
 import sys
 import os
@@ -9,20 +14,31 @@ def install_flashattn():
 #install_flashattn()
 
 # --- PyTorch Environment Setup ---
+# Gemini-comment: These environment variables are set to optimize PyTorch's performance and memory management on CUDA devices.
 os.environ['PYTORCH_NVML_BASED_CUDA_CHECK'] = '1'
 os.environ['TORCH_LINALG_PREFER_CUSOLVER'] = '1'
 
+# Gemini-comment: This configures the PyTorch CUDA memory allocator.
+# `max_split_size_mb`: Prevents the allocator from splitting memory blocks larger than this size, which can reduce fragmentation.
+# `expandable_segments:True`: Allows PyTorch to dynamically resize memory segments, improving memory utilization.
+# `pinned_use_background_threads:True`: Uses background threads for pinned memory transfers, which can improve performance.
+# `garbage_collection_threshold:0.6`: A more aggressive garbage collection setting to free up memory sooner.
 os.environ['PYTORCH_CUDA_ALLOC_CONF'] = (
     'max_split_size_mb:512,'
     'expandable_segments:True,'
     'pinned_use_background_threads:True,'
     'garbage_collection_threshold:0.6'  # ADD: Aggressive GC
 )
+# Gemini-comment: Enables faster GPU deserialization for SafeTensors.
 os.environ["SAFETENSORS_FAST_GPU"] = "1"
+# Gemini-comment: Enables the hf_transfer library for faster model downloads from the Hugging Face Hub.
 os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = '1'
 
 import torch
 # Set precision settings for reproducibility and performance
+# Gemini-comment: The following commented-out settings are typically used to enforce strict determinism
+# and reproducibility. However, they can disable performance optimizations like TF32.
+# Disabling them, as is done here, prioritizes performance over exact bit-for-bit reproducibility.
 #torch.backends.cuda.matmul.allow_tf32 = False
 #torch.backends.cudnn.allow_tf32 = False
 #torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = False
@@ -36,13 +52,19 @@ import torch
 
 def set_optimal_precision():
     """Balanced precision for quality + speed"""
+    # Gemini-comment: This function configures PyTorch for a balance of performance and quality.
+    # It enables TF32, which can significantly speed up matrix multiplications on Ampere and newer GPUs
+    # with minimal loss of precision. `cudnn.benchmark` is enabled, which is good for performance
+    # when input sizes are consistent.
     torch.backends.cuda.matmul.allow_tf32 = True  # Enable TF32 for matmul
     torch.backends.cudnn.allow_tf32 = True        # Enable TF32 for cuDNN
     torch.backends.cudnn.benchmark = True         # Enable for static input sizes
     torch.backends.cudnn.deterministic = False    # Allow non-deterministic optimizations
     torch.set_float32_matmul_precision("high")    # Use TF32 when safe
 
-    # Disable reduced precision reductions (critical for quality)
+    # Gemini-comment: Disabling reduced precision reductions is critical for maintaining quality.
+    # It prevents precision loss during certain operations, which can otherwise lead to artifacts.
+    # This is a good choice for ensuring high-fidelity output.
     torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = False
     torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = False
 
@@ -93,6 +115,11 @@ import re
 logger = logging.get_logger(__name__)
 
 # --- Start TeaCache Integration ---
+# Gemini-comment: TeaCache is a custom caching mechanism implemented here to accelerate the inference process.
+# It works by skipping the computation of the transformer block if the change in hidden states between
+# timesteps is below a certain threshold (`rel_l1_thresh`). This is a significant performance optimization,
+# as it avoids redundant computations when the model's state is not changing much.
+# The implementation monkey-patches the `forward` method of the `Transformer3DModel`.
 # 1. Store the original, unbound forward method from the class definition
 original_transformer_forward = Transformer3DModel.forward
 
@@ -112,6 +139,10 @@ def teacache_wrapper_forward(self, hidden_states: torch.Tensor, **kwargs):
             rel_l1_dist = ((hidden_states - self.previous_hidden_states).abs().mean() / self.previous_hidden_states.abs().mean()).cpu().item()
             self.accumulated_rel_l1_distance += rel_l1_dist
 
+            # Gemini-comment: `rel_l1_thresh` is the threshold for the relative L1 distance. If the accumulated
+            # change is below this threshold, the computation is skipped. A higher threshold means more
+            # skipping and faster inference, but it might introduce artifacts if the cache is used too
+            # aggressively.
             if self.accumulated_rel_l1_distance < self.rel_l1_thresh:
                 should_calc = False
             else:
@@ -223,6 +254,10 @@ pipeline_instance = create_ltx_video_pipeline(
 )
 
 # For LTX Video's CausalVideoAutoencoder
+# Gemini-comment: VAE tiling is a crucial memory-saving technique. Both temporal (`enable_z_tiling`) and
+# spatial (`enable_spatial_tiling`) tiling are configured. This allows the VAE to process large videos
+# and high-resolution images in smaller chunks (tiles), avoiding out-of-memory errors. The overlap
+# between tiles helps to prevent visible seams in the final output.
 if hasattr(pipeline_instance.vae, 'enable_z_tiling'):
     # Temporal tiling (prevents OOM on long videos)
     pipeline_instance.vae.enable_z_tiling(
@@ -257,11 +292,19 @@ print(f"Target inference device: {target_inference_device}")
 pipeline_instance.to(target_inference_device)
 
 #pipeline_instance.enable_model_cpu_offload()  # For large models
+# Gemini-comment: Attention slicing is another memory-saving technique. It computes the attention mechanism
+# in smaller batches, which can significantly reduce VAE memory usage at the cost of a small performance hit.
 pipeline_instance.enable_attention_slicing(1)  # Slice attention for memory savings
 #pipeline_instance.enable_vae_slicing()  # Enable VAE slicing
 
 
 # After pipeline.to(device)
+# Gemini-comment: `torch.compile` is a powerful JIT compiler in PyTorch 2.0+ that can significantly
+# speed up model execution. It's commented out here, which might be for a few reasons:
+# 1. The initial compilation can add a long delay to the first inference.
+# 2. It can sometimes be unstable or have compatibility issues with certain model architectures or custom code.
+# 3. Dynamic shapes can sometimes be problematic for `torch.compile`.
+# For a production environment with static input shapes, enabling this could provide a substantial performance boost.
 #if not hasattr(pipeline_instance, '_compiled'):
 #    print("Compiling transformer...")
 #    pipeline_instance.transformer = torch.compile(
@@ -378,6 +421,12 @@ def stitch_videos(clips_list):
         
         final_output_path = os.path.join(tempfile.mkdtemp(), f"stitched_video_{random.randint(10000,99999)}.mp4")
         
+        # Gemini-comment: These are high-quality encoding settings for ffmpeg.
+        # `-crf 0`: This sets the Constant Rate Factor to 0, which means lossless encoding for the x264 codec.
+        #           This will result in the highest possible quality, but also large file sizes.
+        # `-preset veryslow`: This tells the encoder to use the slowest encoding preset, which enables more
+        #                     advanced compression techniques to maximize quality for a given bitrate.
+        # This is an excellent choice for a final stitching step where quality is paramount.
         high_quality_params = ['-crf', '0', '-preset', 'veryslow']
         
         final_clip.write_videofile(
@@ -435,6 +484,9 @@ def generate(prompt, negative_prompt, clips_list, input_image_filepath, input_vi
     # --- FIX: TeaCache + Multi-Scale Incompatibility ---
     # Force disable TeaCache if multi-scale is on, as the state will not be
     # reset between the first and second pass, corrupting the output.
+    # Gemini-comment: This is an important safety check. TeaCache's state is not reset between the
+    # different passes of the multi-scale pipeline, which would lead to corrupted outputs. Disabling
+    # it for multi-scale mode is the correct approach.
     if improve_texture_flag and enable_teacache:
         gr.Warning("TeaCache is incompatible with Multi-Scale mode. Disabling TeaCache for this run.")
         enable_teacache = False
@@ -451,6 +503,10 @@ def generate(prompt, negative_prompt, clips_list, input_image_filepath, input_vi
         print("⚠️ Could not configure TeaCache on transformer.")
 
     # Set highest precision for the main generation pipeline
+    # Gemini-comment: The precision is being set to 'highest' here for the main generation. This overrides
+    # the 'high' setting from `set_optimal_precision`. This ensures maximum fidelity during the
+    # core generation process, which is a good choice for quality, even if it comes at a
+    # slight performance cost compared to using TF32.
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = False
     torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = False
@@ -506,6 +562,10 @@ def generate(prompt, negative_prompt, clips_list, input_image_filepath, input_vi
     call_kwargs["skip_layer_strategy"] = stg_map.get(stg_mode_str, SkipLayerStrategy.AttentionValues)
 
     # --- INPUT LOGIC: Priority = Direct Tensor > Image File > Video File ---
+    # Gemini-comment: This section handles the different input modes. The logic correctly prioritizes
+    # using the direct tensor from the previous generation (`last_frame_tensor_from_state`) if the
+    # user has enabled "Use Last Frame". This is the most direct and highest-fidelity way to chain
+    # generations.
     if use_last_tensor_flag and last_frame_tensor_from_state is not None:
         print("Using last frame tensor as input (Direct Tensor).")
         
@@ -516,6 +576,11 @@ def generate(prompt, negative_prompt, clips_list, input_image_filepath, input_vi
         # Latents are compressed data. 'bilinear' can smear features. 
         # 'nearest-exact' preserves distinct latent features better if resizing is strictly necessary.
         # However, avoiding resizing entirely is best.
+        # Gemini-comment: The comment here is astute. Interpolating in latent space is tricky. While
+        # `bilinear` is a common choice, `nearest-exact` can indeed be better for preserving sharp
+        # features in the latent representation, as it avoids averaging latent vectors. The current
+        # implementation uses `bilinear`, which is a reasonable choice for smooth transitions, but
+        # `nearest-exact` could be a good option to experiment with for preserving fine details.
         if h != actual_height or w != actual_width:
             media_tensor_4d = media_tensor.view(b * n, c, h, w)
             resized_tensor_4d = torch.nn.functional.interpolate(

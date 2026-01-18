@@ -4,18 +4,26 @@ This repository contains the source code for several Hugging Face Spaces related
 
 ## Repository Structure
 
-The repository is organized to maintain the original codebases while allowing for parallel development and testing of new features.
+The repository is organized into several Hugging Face Spaces and a shared `packages` directory.
 
-*   **Original Code:** The original Python code for the Hugging Face Spaces will be kept in their respective directories (e.g., `hf_spaces/ltx-2-distilled`) and will remain unmodified. This serves as a stable baseline.
-*   **Experimental Testers:** For development, we will create copies of the original applications, named `tester-a`, `tester-b`, and so on. These copies will be used to implement and test new features.
+*   **`packages`**: This directory contains the core libraries (`ltx-core`, `ltx-pipelines`, `ltx-trainer`) that are shared across all the Hugging Face Spaces. Changes made in these packages will affect all the applications.
+
+*   **Hugging Face Spaces (`hf_spaces`)**:
+    *   **`ltx-2-distilled-original`**: The original, unmodified version of the LTX-2 distilled space.
+    *   **`ltx-2-distilled`**: A refactored version of the LTX-2 distilled space, which now includes stitching capabilities and an API. This serves as an example of a "tester" application.
+    *   **`ltx-2-distilled-tester-a` / `ltx-2-distilled-tester-b`**: Copies of the original application for implementing and testing new features.
+    *   **`ltx-video-distilled-tester-original`**: The original, unmodified version of the LTX-Video distilled tester space.
+    *   **`ltx-video-distilled-tester-dev`**: A development version of the LTX-Video distilled tester.
+    *   **`ltx-video-distilled-tester`**: The space that was initially analyzed.
 
 ## Development Roadmap
 
-### 1. Feature Porting: `ltx-2-distilled` to `ltx-2`
+### 1. Feature Porting: `ltx-video-distilled-tester` to `ltx-2-distilled`
 
-The primary goal is to merge features from the `ltx-2-distilled` space into the main `ltx-2` space. This includes, but is not limited to:
+The primary goal is to merge features from the `ltx-video-distilled-tester-dev` space into the `ltx-2-distilled` space. This includes, but is not limited to:
 
-*   **Stitching:** Implement the video stitching functionality from `ltx-2-distilled` into the `ltx-2` pipeline.
+*   **Stitching and Video Continuation**: Implementing the advanced stitching and video continuation logic.
+*   **Advanced Configuration**: Porting the highly tuned performance and quality settings.
 
 ### 2. Enhancements for `ltx-1-dev`
 
@@ -26,11 +34,15 @@ We will also focus on improving the `ltx-1-dev` model/space. The specific enhanc
 *   **Code Quality:** Refactor and improve the code quality of the new tester applications.
 *   **Documentation:** Update documentation to reflect the changes and new features.
 
+### 4. Checkpoint and Pipeline Configuration Management
+
+*   Implement a mechanism to switch between different checkpoints and their corresponding pipeline configurations. The supported checkpoints will be: `dev`, `dev-fp4`, `dev-fp8`, `distilled`, and `distilled-fp8`.
+
 ## Progress
 
-### `ltx-video-distilled-tester` Analysis (Completed)
+### `ltx-video-distilled-tester-dev` Analysis (Completed)
 
-*   Conducted a deep-dive analysis of the `ltx-video-distilled-tester` codebase.
+*   Conducted a deep-dive analysis of the `ltx-video-distilled-tester-dev` codebase.
 *   Added extensive comments to the following files to document performance and quality-related settings, with a focus on video stitching and continuation:
     *   `inference.py`
     *   `app.py`
