@@ -91,6 +91,16 @@ pipeline = DistilledPipeline(
     local_files_only=False,
 )
 
+# Gemini-comment: TeaCache Integration
+# To significantly accelerate inference (up to 2x speedup), TeaCache can be integrated here.
+# This involves monkey-patching the `Transformer3DModel.forward` method to skip redundant computations.
+# See `ltx-video-distilled-tester-dev/app.py` for a complete implementation reference.
+# Example logic:
+# if enable_teacache:
+#     pipeline.transformer.enable_teacache = True
+#     pipeline.transformer.rel_l1_thresh = 0.05
+#     # Apply monkey-patch...
+
 # Initialize text encoder client
 print(f"Connecting to text encoder space: {TEXT_ENCODER_SPACE}")
 try:
@@ -152,6 +162,10 @@ def generate_single_clip(
     randomize_seed: bool = True,
     height: int = DEFAULT_HEIGHT,
     width: int = DEFAULT_WIDTH,
+    # Gemini-comment: Support for "Direct Tensor" input
+    # For seamless video continuation, accepting the last frame's latent tensor directly is superior
+    # to re-encoding the last frame image.
+    # input_tensor: Optional[torch.Tensor] = None
 ):
     """Generate a single video clip."""
     try:
@@ -182,7 +196,17 @@ def generate_single_clip(
             # Format: (image_path, frame_idx, strength)
             images = [(str(temp_image_path), 0, 1.0)]
         
+        # Gemini-comment: Direct Tensor Logic
+        # if input_tensor is not None:
+        #     # Use tensor instead of re-encoding image
+        #     pass
+
         video_context, audio_context = get_embeddings(prompt, enhance_prompt, temp_image_path, current_seed)
+
+        # Gemini-comment: Multi-Scale Pipeline
+        # For higher quality textures, especially when upscaling, the `LTXMultiScalePipeline`
+        # (as seen in `ltx-video-distilled-tester-dev`) can be used here instead of the standard pipeline.
+        # It runs a second pass on the upscaled latents.
 
         # Run inference
         pipeline(
@@ -214,11 +238,20 @@ def stitch_videos(clips_list: List[str]) -> str:
     
     print(f"Stitching {len(clips_list)} clips...")
     try:
+        # Gemini-comment: Video Stitching Improvements
+        # The current implementation uses `moviepy` with high-quality settings, which is good.
+        # For even smoother transitions, consider:
+        # 1. RIFE Interpolation: Generate intermediate frames between clips using a model like RIFE.
+        #    This creates a seamless morph instead of a hard cut.
+        # 2. Cross-fades: `moviepy` supports cross-fades (`clip.crossfadein(1.0)`).
         video_clips = [VideoFileClip(clip_path) for clip_path in clips_list]
         final_clip = concatenate_videoclips(video_clips, method="compose")
         
         final_output_path = os.path.join(tempfile.mkdtemp(), f"stitched_video_{random.randint(10000,99999)}.mp4")
         
+        # Gemini-comment: High Quality Settings
+        # -crf 0: Lossless
+        # -preset veryslow: Best compression efficiency
         high_quality_params = ['-crf', '0', '-preset', 'veryslow']
         
         final_clip.write_videofile(

@@ -66,6 +66,54 @@ async def stitch(request: StitchRequest):
     except (ValueError, RuntimeError) as e:
         return {"error": str(e)}
 
+# Gemini-comment: New Features Integration
+# The following endpoints are placeholders for integrating other Hugging Face Spaces and services.
+# These integrations would allow "Jules, private web app" to orchestrate a full creative pipeline.
+
+# @app.post("/generate_image/")
+# async def generate_image_proxy(prompt: str):
+#     """
+#     Call an external Image Generation Space (e.g., FLUX, SDXL).
+#     This allows creating the initial frame for video generation from text.
+#     """
+#     # Implementation: Use `gradio_client` to call the external space.
+#     pass
+
+# @app.post("/interpolate/")
+# async def interpolate_video(video_path: str, interpolation_factor: int = 2):
+#     """
+#     Call an external RIFE Interpolation Space.
+#     This smoothens the video by generating intermediate frames.
+#     """
+#     # Implementation: Call RIFE space API.
+#     pass
+
+# @app.post("/upload_ftp/")
+# async def upload_to_ftp(file_path: str):
+#     """
+#     Upload a generated video to an FTP server.
+#     Useful for archiving or transferring to other systems.
+#     """
+#     # Implementation: Use `paramiko` (as seen in `ltx-video-distilled-tester-dev/app.py`).
+#     pass
+
+# @app.post("/store_notes/")
+# async def store_notes(note_content: str, related_media_path: Optional[str] = None):
+#     """
+#     Store notes or metadata about a generation in a Notes Space or database.
+#     This could include prompts, seeds, and user feedback.
+#     """
+#     # Implementation: Call Notes space API or database.
+#     pass
+
+# Gemini-comment: Storage API & Tensor Persistence
+# Question for the user: "Since we need to store 'last frame data' kind of tensors for video continuation,
+# should we use a specific Storage API (like an S3 bucket, a dedicated HF Dataset, or a custom database)
+# to keep these heavy tensor files? Or should we rely on the FTP solution mentioned above?"
+#
+# Keeping tensor data allows for perfect "lossless" continuation, whereas using the video frame
+# introduces re-encoding artifacts.
+
 @app.get("/")
 async def root():
     return {"message": "LTX-2 Distilled API is running."}
